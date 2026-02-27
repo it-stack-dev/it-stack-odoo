@@ -1,0 +1,29 @@
+# Lab 01 — Standalone: Complete Odoo ERP and business management in isolation
+# No external dependencies required.
+---
+services:
+  odoo:
+    image: odoo:17
+    container_name: it-stack-odoo
+    restart: unless-stopped
+    ports:
+      - "8069:$firstPort"
+    environment:
+      - IT_STACK_ENV=lab-01-standalone
+    volumes:
+      - odoo_data:/var/lib/odoo
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - it-stack-net
+
+networks:
+  it-stack-net:
+    driver: bridge
+
+volumes:
+  odoo_data:

@@ -1,0 +1,36 @@
+# Lab 02 — External Dependencies: odoo with external PostgreSQL and Redis
+---
+services:
+  odoo:
+    image: odoo:17
+    container_name: it-stack-odoo
+    restart: unless-stopped
+    ports:
+      - "8069:$firstPort"
+    environment:
+      - IT_STACK_ENV=lab-02-lan
+      - DB_HOST=
+      - DB_PORT=5432
+      - REDIS_HOST=
+    networks:
+      - it-stack-net
+
+  # Lightweight local DB for lab (replace with lab-db1 in real env)
+  postgres:
+    image: postgres:16
+    container_name: it-stack-odoo-db
+    environment:
+      POSTGRES_DB: odoo_db
+      POSTGRES_USER: odoo_user
+      POSTGRES_PASSWORD: odoo_pass
+    volumes:
+      - odoo_pg_data:/var/lib/postgresql/data
+    networks:
+      - it-stack-net
+
+networks:
+  it-stack-net:
+    driver: bridge
+
+volumes:
+  odoo_pg_data:
