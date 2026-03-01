@@ -1,36 +1,100 @@
-# Lab 02 — External Dependencies: odoo with external PostgreSQL and Redis
----
+# Lab 02 — External Dependencies
+# Module 13: Odoo ERP
+# External PostgreSQL + Redis (sessions/cache) + Mailhog SMTP relay
+# Web UI:  http://localhost:8312
+# Mailhog: http://localhost:8612
+
+name: it-stack-odoo-lab02
+
 services:
-  odoo:
-    image: odoo:17
-    container_name: it-stack-odoo
+  # ── External Database (simulates lab-db1) ────────────────────────────────────
+  odoo-l02-db:
+    image: postgres:15-alpine
+    container_name: odoo-l02-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: odoo_lab02
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: OdooLab02!
+    volumes:
+      - odoo-l02-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odoo -d odoo_lab02"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks:
+      - odoo-l02-net
+
+  # ── Redis (session store / cache) ─────────────────────────────────────────────
+  odoo-l02-redis:
+    image: redis:7-alpine
+    container_name: odoo-l02-redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - odoo-l02-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    networks:
+      - odoo-l02-net
+
+  # ── External SMTP Relay ───────────────────────────────────────────────────────
+  odoo-l02-mail:
+    image: mailhog/mailhog:latest
+    container_name: odoo-l02-mail
     restart: unless-stopped
     ports:
-      - "8069:$firstPort"
-    environment:
-      - IT_STACK_ENV=lab-02-lan
-      - DB_HOST=
-      - DB_PORT=5432
-      - REDIS_HOST=
+      - "8612:8025"
     networks:
-      - it-stack-net
+      - odoo-l02-net
 
-  # Lightweight local DB for lab (replace with lab-db1 in real env)
-  postgres:
-    image: postgres:16
-    container_name: it-stack-odoo-db
+  # ── Odoo Application ──────────────────────────────────────────────────────────
+  odoo-l02-app:
+    image: odoo:17
+    container_name: odoo-l02-app
+    restart: unless-stopped
+    depends_on:
+      odoo-l02-db:
+        condition: service_healthy
+      odoo-l02-redis:
+        condition: service_healthy
+      odoo-l02-mail:
+        condition: service_started
+    ports:
+      - "8312:8069"
     environment:
-      POSTGRES_DB: odoo_db
-      POSTGRES_USER: odoo_user
-      POSTGRES_PASSWORD: odoo_pass
+      HOST: odoo-l02-db
+      PORT: "5432"
+      USER: odoo
+      PASSWORD: OdooLab02!
+    command:
+      - --db-filter=odoo_lab02
+      - --limit-time-cpu=600
+      - --limit-time-real=1200
     volumes:
-      - odoo_pg_data:/var/lib/postgresql/data
+      - odoo-l02-data:/var/lib/odoo
+      - odoo-l02-addons:/mnt/extra-addons
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8069/web/health | grep -q 'ok\\|pass'"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
     networks:
-      - it-stack-net
+      - odoo-l02-net
 
 networks:
-  it-stack-net:
+  odoo-l02-net:
     driver: bridge
 
 volumes:
-  odoo_pg_data:
+  odoo-l02-db-data:
+  odoo-l02-redis-data:
+  odoo-l02-data:
+  odoo-l02-addons:

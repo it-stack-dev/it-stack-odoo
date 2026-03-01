@@ -96,3 +96,33 @@ jobs:
       - name: Cleanup
         if: always()
         run: docker compose -f docker/docker-compose.standalone.yml down -v
+
+  lab-02-smoke:
+    name: Lab 02 -- Odoo External Dependencies (PostgreSQL + Redis + Mailhog)
+    runs-on: ubuntu-latest
+    needs: validate
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get install -y curl postgresql-client
+      - name: Validate LAN compose
+        run: docker compose -f docker/docker-compose.lan.yml config -q && echo "LAN compose valid"
+      - name: Start LAN stack
+        run: docker compose -f docker/docker-compose.lan.yml up -d
+      - name: Wait for PostgreSQL
+        run: timeout 60 bash -c 'until docker exec odoo-l02-db pg_isready -U odoo -d odoo_lab02; do sleep 5; done'
+      - name: Wait for Redis
+        run: timeout 30 bash -c 'until docker exec odoo-l02-redis redis-cli ping | grep -q PONG; do sleep 3; done'
+      - name: Wait for Mailhog
+        run: timeout 60 bash -c 'until curl -sf http://localhost:8612/api/v2/messages; do sleep 5; done'
+      - name: Wait for Odoo
+        run: timeout 180 bash -c 'until curl -sf http://localhost:8312/web/health | grep -q ok; do sleep 10; done'
+      - name: Run Lab 13-02 test script
+        run: bash tests/labs/test-lab-13-02.sh --no-cleanup
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.lan.yml logs
+      - name: Cleanup
+        if: always()
+        run: docker compose -f docker/docker-compose.lan.yml down -v
