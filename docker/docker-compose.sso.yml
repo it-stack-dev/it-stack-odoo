@@ -1,34 +1,183 @@
-# Lab 04 — SSO Integration: odoo with Keycloak OIDC authentication
----
-services:
-  odoo:
-    image: odoo:17
-    container_name: it-stack-odoo
-    restart: unless-stopped
-    ports:
-      - "8069:$firstPort"
-    environment:
-      - IT_STACK_ENV=lab-04-sso
-      - KEYCLOAK_URL=
-      - KEYCLOAK_REALM=
-      - KEYCLOAK_CLIENT_ID=odoo
-      - KEYCLOAK_CLIENT_SECRET=
-    networks:
-      - it-stack-net
+# =============================================================================
+# IT-Stack: Odoo — Lab 04: SSO Integration
+# Module 13 · Phase 3 · Lab 04
+# =============================================================================
+# Services: PostgreSQL · OpenLDAP · Keycloak · Mailhog · Odoo
+# Ports:    Odoo:8350  Gevent:8351  Keycloak:8450  LDAP:3893  Mailhog:8650
+# Credentials:
+#   DB root:  postgres / RootLab04!
+#   Odoo DB:  odoo / OdooLab04!
+#   Keycloak: admin / Admin04!
+#   LDAP:     cn=admin,dc=lab,dc=local / LdapLab04!
+# What's new vs Lab 03:
+#   + OpenLDAP directory for built-in Odoo LDAP auth (auth_ldap)
+#   + Keycloak 24 dev-mode as OIDC IdP (it-stack realm)
+#   + LDAP env vars wired; Odoo auth_ldap configured via Admin UI / RPC
+#   + Keycloak OIDC discovery endpoint tested in Lab 04
+# =============================================================================
 
-  # Local Keycloak for SSO lab (replace with lab-id1 in real env)
-  keycloak:
-    image: quay.io/keycloak/keycloak:24
-    container_name: it-stack-odoo-keycloak
+name: it-stack-odoo-lab04
+
+services:
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────
+  odoo-s04-db:
+    image: postgres:15-alpine
+    container_name: odoo-s04-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: OdooLab04!
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - odoo-s04-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odoo"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+    networks:
+      - odoo-s04-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+
+  # ── OpenLDAP ─────────────────────────────────────────────────────────────
+  odoo-s04-ldap:
+    image: osixia/openldap:1.5.0
+    container_name: odoo-s04-ldap
+    restart: unless-stopped
+    environment:
+      LDAP_ORGANISATION: "IT-Stack Lab"
+      LDAP_DOMAIN: lab.local
+      LDAP_ADMIN_PASSWORD: LdapLab04!
+      LDAP_CONFIG_PASSWORD: ConfigLab04!
+      LDAP_BASE_DN: dc=lab,dc=local
+      LDAP_READONLY_USER: "true"
+      LDAP_READONLY_USER_USERNAME: readonly
+      LDAP_READONLY_USER_PASSWORD: ReadOnly04!
+    ports:
+      - "3893:389"
+    volumes:
+      - odoo-s04-ldap-data:/var/lib/ldap
+      - odoo-s04-ldap-config:/etc/ldap/slapd.d
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b dc=lab,dc=local -D cn=admin,dc=lab,dc=local -w LdapLab04! cn=admin > /dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+    networks:
+      - odoo-s04-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
+
+  # ── Keycloak ─────────────────────────────────────────────────────────────
+  odoo-s04-kc:
+    image: quay.io/keycloak/keycloak:24.0.3
+    container_name: odoo-s04-kc
+    restart: unless-stopped
     command: start-dev
     environment:
       KEYCLOAK_ADMIN: admin
-      KEYCLOAK_ADMIN_PASSWORD: admin
+      KEYCLOAK_ADMIN_PASSWORD: Admin04!
+      KC_HEALTH_ENABLED: "true"
+      KC_DB: dev-file
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_HTTP_ENABLED: "true"
     ports:
-      - "8080:8080"
+      - "8450:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/realms/master || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
     networks:
-      - it-stack-net
+      - odoo-s04-net
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
 
+  # ── Mailhog ──────────────────────────────────────────────────────────────
+  odoo-s04-mail:
+    image: mailhog/mailhog:latest
+    container_name: odoo-s04-mail
+    restart: unless-stopped
+    ports:
+      - "8650:8025"
+    networks:
+      - odoo-s04-net
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.1"
+
+  # ── Odoo ─────────────────────────────────────────────────────────────────
+  odoo-s04-app:
+    image: odoo:17
+    container_name: odoo-s04-app
+    restart: unless-stopped
+    depends_on:
+      odoo-s04-db:
+        condition: service_healthy
+      odoo-s04-ldap:
+        condition: service_healthy
+    ports:
+      - "8350:8069"
+      - "8351:8072"
+    environment:
+      HOST: odoo-s04-db
+      PORT: "5432"
+      USER: odoo
+      PASSWORD: OdooLab04!
+      # LDAP integration (configured via Settings > Users > LDAP)
+      LDAP_HOST: odoo-s04-ldap
+      LDAP_PORT: "389"
+      LDAP_BASE_DN: dc=lab,dc=local
+      LDAP_FILTER: (uid=%s)
+      LDAP_ADMIN_DN: cn=admin,dc=lab,dc=local
+      LDAP_ADMIN_PASSWORD: LdapLab04!
+      # Keycloak OIDC reference (configured via auth_oidc module in Odoo UI)
+      KEYCLOAK_URL: http://odoo-s04-kc:8080
+      KEYCLOAK_REALM: it-stack
+      KEYCLOAK_CLIENT_ID: odoo
+    command: >
+      --workers=2
+      --max-cron-threads=1
+      --longpolling-port=8072
+      --smtp-server=odoo-s04-mail
+      --smtp-port=1025
+    volumes:
+      - odoo-s04-data:/var/lib/odoo
+      - odoo-s04-addons:/mnt/extra-addons
+    networks:
+      - odoo-s04-net
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.5"
+
+# ── Networks ─────────────────────────────────────────────────────────────────
 networks:
-  it-stack-net:
+  odoo-s04-net:
+    name: odoo-s04-net
     driver: bridge
+
+# ── Volumes ──────────────────────────────────────────────────────────────────
+volumes:
+  odoo-s04-db-data:
+  odoo-s04-ldap-data:
+  odoo-s04-ldap-config:
+  odoo-s04-data:
+  odoo-s04-addons:
