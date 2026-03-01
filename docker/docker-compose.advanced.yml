@@ -1,34 +1,124 @@
-# Lab 03 — Advanced Features: odoo with TLS, resource limits, logging
----
+# Lab 03 — Advanced Features
+# Module 13: Odoo ERP
+# External PostgreSQL + Redis + Mailhog + multi-worker (gevent longpolling)
+# Web UI:        http://localhost:8330
+# Longpolling:   http://localhost:8331 (gevent)
+# Mailhog:       http://localhost:8630
+
+name: it-stack-odoo-lab03
+
 services:
-  odoo:
-    image: odoo:17
-    container_name: it-stack-odoo
+  # ── External Database ─────────────────────────────────────────────────────────
+  odoo-a03-db:
+    image: postgres:15-alpine
+    container_name: odoo-a03-db
     restart: unless-stopped
-    ports:
-      - "8069:$firstPort"
     environment:
-      - IT_STACK_ENV=lab-03-advanced
-      - TLS_ENABLED=true
+      POSTGRES_DB: odoo_lab03
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: OdooLab03!
     volumes:
-      - odoo_data:/var/lib/odoo
-      - ./certs:/etc/ssl/certs:ro
+      - odoo-a03-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odoo -d odoo_lab03"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     deploy:
       resources:
         limits:
-          cpus: "2.0"
-          memory: G
-    logging:
-      driver: json-file
-      options:
-        max-size: "100m"
-        max-file: "5"
+          cpus: "0.5"
+          memory: 512M
     networks:
-      - it-stack-net
+      - odoo-a03-net
+
+  # ── Redis ─────────────────────────────────────────────────────────────────────
+  odoo-a03-redis:
+    image: redis:7-alpine
+    container_name: odoo-a03-redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - odoo-a03-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+    networks:
+      - odoo-a03-net
+
+  # ── SMTP Relay ────────────────────────────────────────────────────────────────
+  odoo-a03-mail:
+    image: mailhog/mailhog:latest
+    container_name: odoo-a03-mail
+    restart: unless-stopped
+    ports:
+      - "8630:8025"
+    networks:
+      - odoo-a03-net
+
+  # ── Odoo Application (multi-worker + gevent longpoll) ─────────────────────────
+  odoo-a03-app:
+    image: odoo:17
+    container_name: odoo-a03-app
+    restart: unless-stopped
+    depends_on:
+      odoo-a03-db:
+        condition: service_healthy
+      odoo-a03-redis:
+        condition: service_healthy
+      odoo-a03-mail:
+        condition: service_started
+    ports:
+      - "8330:8069"
+      - "8331:8072"
+    environment:
+      HOST: odoo-a03-db
+      PORT: "5432"
+      USER: odoo
+      PASSWORD: OdooLab03!
+    command:
+      - --db-filter=odoo_lab03
+      - --workers=2
+      - --max-cron-threads=1
+      - --longpolling-port=8072
+      - --limit-time-cpu=600
+      - --limit-time-real=1200
+      - --limit-memory-hard=1677721600
+      - --limit-memory-soft=1342177280
+      - --smtp-server=odoo-a03-mail
+      - --smtp-port=1025
+    volumes:
+      - odoo-a03-data:/var/lib/odoo
+      - odoo-a03-addons:/mnt/extra-addons
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8069/web/health | grep -q 'ok\\|pass'"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 2G
+    networks:
+      - odoo-a03-net
 
 networks:
-  it-stack-net:
+  odoo-a03-net:
     driver: bridge
 
 volumes:
-  odoo_data:
+  odoo-a03-db-data:
+  odoo-a03-redis-data:
+  odoo-a03-data:
+  odoo-a03-addons:
