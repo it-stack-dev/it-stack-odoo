@@ -1,26 +1,240 @@
-# Lab 05 — Advanced Integration: odoo with full IT-Stack ecosystem
----
+# =============================================================================
+# IT-Stack: Odoo — Lab 05: Advanced Integration
+# Module 13 · Phase 3 · Lab 05
+# =============================================================================
+# Services: PostgreSQL · OpenLDAP · Keycloak · WireMock (Snipe-IT + FreeIPA-mock) · Mailhog · Odoo
+# Ports:    Odoo:8370  Gevent:8371  WireMock:8372  Keycloak:8470  LDAP:3896  MH:8670
+# Credentials:
+#   DB root:  postgres / RootLab05!
+#   Odoo DB:  odoo / OdooLab05!
+#   Keycloak: admin / Admin05!
+#   LDAP:     cn=admin,dc=lab,dc=local / LdapLab05!
+# What's new vs Lab 04:
+#   + WireMock simulates Snipe-IT REST API (/api/v1/hardware, /api/v1/users)
+#   + WireMock also mocks SuiteCRM JSONRPC (customer sync partner)
+#   + Odoo integration env vars: SNIPEIT_URL, SNIPEIT_TOKEN, SUITECRM_URL
+#   + Redis retained for Odoo session cache
+# Integration tested: Odoo ↔ Snipe-IT (asset procurement), Odoo ↔ SuiteCRM (customer sync)
+# =============================================================================
+
+name: it-stack-odoo-lab05
+
 services:
-  odoo:
-    image: odoo:17
-    container_name: it-stack-odoo
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────
+  odoo-i05-db:
+    image: postgres:15-alpine
+    container_name: odoo-i05-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: OdooLab05!
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - odoo-i05-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odoo"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+    networks:
+      - odoo-i05-net
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+
+  # ── Redis ────────────────────────────────────────────────────────────────
+  odoo-i05-redis:
+    image: redis:7-alpine
+    container_name: odoo-i05-redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - odoo-i05-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
+
+  # ── OpenLDAP ─────────────────────────────────────────────────────────────
+  odoo-i05-ldap:
+    image: osixia/openldap:1.5.0
+    container_name: odoo-i05-ldap
+    restart: unless-stopped
+    environment:
+      LDAP_ORGANISATION: "IT-Stack Lab"
+      LDAP_DOMAIN: lab.local
+      LDAP_ADMIN_PASSWORD: LdapLab05!
+      LDAP_CONFIG_PASSWORD: ConfigLab05!
+      LDAP_BASE_DN: dc=lab,dc=local
+      LDAP_READONLY_USER: "true"
+      LDAP_READONLY_USER_USERNAME: readonly
+      LDAP_READONLY_USER_PASSWORD: ReadOnly05!
+    ports:
+      - "3896:389"
+    volumes:
+      - odoo-i05-ldap-data:/var/lib/ldap
+      - odoo-i05-ldap-config:/etc/ldap/slapd.d
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b dc=lab,dc=local -D cn=admin,dc=lab,dc=local -w LdapLab05! cn=admin > /dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+    networks:
+      - odoo-i05-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
+
+  # ── Keycloak ─────────────────────────────────────────────────────────────
+  odoo-i05-kc:
+    image: quay.io/keycloak/keycloak:24.0.3
+    container_name: odoo-i05-kc
+    restart: unless-stopped
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: Admin05!
+      KC_HEALTH_ENABLED: "true"
+      KC_DB: dev-file
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_HTTP_ENABLED: "true"
+    ports:
+      - "8470:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/realms/master || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+    networks:
+      - odoo-i05-net
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+
+  # ── WireMock — Snipe-IT REST + SuiteCRM JSONRPC mock ────────────────────
+  odoo-i05-mock:
+    image: wiremock/wiremock:3.3.1
+    container_name: odoo-i05-mock
+    restart: unless-stopped
+    command: >
+      --port=8080
+      --verbose
+      --global-response-templating
+    ports:
+      - "8372:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/__admin/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - odoo-i05-net
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.25"
+
+  # ── Mailhog ──────────────────────────────────────────────────────────────
+  odoo-i05-mail:
+    image: mailhog/mailhog:latest
+    container_name: odoo-i05-mail
     restart: unless-stopped
     ports:
-      - "8069:$firstPort"
-    environment:
-      - IT_STACK_ENV=lab-05-integration
-      - KEYCLOAK_URL=
-      - DB_HOST=
-      - REDIS_HOST=
-      - SMTP_HOST=
-      - GRAYLOG_HOST=
-    extra_hosts:
-      - "lab-id1:10.0.50.11"
-      - "lab-db1:10.0.50.12"
-      - "lab-proxy1:10.0.50.15"
+      - "8670:8025"
     networks:
-      - it-stack-net
+      - odoo-i05-net
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.1"
 
+  # ── Odoo ─────────────────────────────────────────────────────────────────
+  odoo-i05-app:
+    image: odoo:17
+    container_name: odoo-i05-app
+    restart: unless-stopped
+    depends_on:
+      odoo-i05-db:
+        condition: service_healthy
+      odoo-i05-redis:
+        condition: service_healthy
+      odoo-i05-ldap:
+        condition: service_healthy
+      odoo-i05-mock:
+        condition: service_healthy
+    ports:
+      - "8370:8069"
+      - "8371:8072"
+    environment:
+      HOST: odoo-i05-db
+      PORT: "5432"
+      USER: odoo
+      PASSWORD: OdooLab05!
+      # LDAP integration
+      LDAP_HOST: odoo-i05-ldap
+      LDAP_PORT: "389"
+      LDAP_BASE_DN: dc=lab,dc=local
+      LDAP_FILTER: (uid=%s)
+      LDAP_ADMIN_DN: cn=admin,dc=lab,dc=local
+      LDAP_ADMIN_PASSWORD: LdapLab05!
+      # Keycloak OIDC
+      KEYCLOAK_URL: http://odoo-i05-kc:8080
+      KEYCLOAK_REALM: it-stack
+      KEYCLOAK_CLIENT_ID: odoo
+      # Snipe-IT integration (via WireMock)
+      SNIPEIT_URL: http://odoo-i05-mock:8080
+      SNIPEIT_API_TOKEN: lab-snipeit-token-05
+      SNIPEIT_HARDWARE_ENDPOINT: /api/v1/hardware
+      SNIPEIT_USERS_ENDPOINT: /api/v1/users
+      # SuiteCRM sync (via WireMock)
+      SUITECRM_URL: http://odoo-i05-mock:8080
+      SUITECRM_JSONRPC_ENDPOINT: /jsonrpc
+    command: >
+      --workers=2
+      --max-cron-threads=1
+      --longpolling-port=8072
+      --smtp-server=odoo-i05-mail
+      --smtp-port=1025
+    volumes:
+      - odoo-i05-data:/var/lib/odoo
+      - odoo-i05-addons:/mnt/extra-addons
+    networks:
+      - odoo-i05-net
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.5"
+
+# ── Networks ─────────────────────────────────────────────────────────────────
 networks:
-  it-stack-net:
+  odoo-i05-net:
+    name: odoo-i05-net
     driver: bridge
+
+# ── Volumes ──────────────────────────────────────────────────────────────────
+volumes:
+  odoo-i05-db-data:
+  odoo-i05-ldap-data:
+  odoo-i05-ldap-config:
+  odoo-i05-redis-data:
+  odoo-i05-data:
+  odoo-i05-addons:
