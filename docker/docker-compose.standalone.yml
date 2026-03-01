@@ -1,29 +1,57 @@
-# Lab 01 — Standalone: Complete Odoo ERP and business management in isolation
-# No external dependencies required.
+# Lab 01 — Standalone: Odoo ERP in complete isolation
+# Module 13 | No external dependencies required
 ---
 services:
-  odoo:
-    image: odoo:17
-    container_name: it-stack-odoo
+  odoo-s01-db:
+    image: postgres:15-alpine
+    container_name: odoo-s01-db
     restart: unless-stopped
-    ports:
-      - "8069:$firstPort"
     environment:
-      - IT_STACK_ENV=lab-01-standalone
+      POSTGRES_DB: postgres
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: OdooLab01!
     volumes:
-      - odoo_data:/var/lib/odoo
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
+      - odoo-s01-db-data:/var/lib/postgresql/data
     networks:
-      - it-stack-net
+      - odoo-s01-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odoo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-networks:
-  it-stack-net:
-    driver: bridge
+  odoo-s01-app:
+    image: odoo:17
+    container_name: odoo-s01-app
+    restart: unless-stopped
+    depends_on:
+      odoo-s01-db:
+        condition: service_healthy
+    environment:
+      HOST: odoo-s01-db
+      PORT: "5432"
+      USER: odoo
+      PASSWORD: OdooLab01!
+    command: --db-filter=odoo_lab01
+    ports:
+      - "8303:8069"
+    volumes:
+      - odoo-s01-data:/var/lib/odoo
+      - odoo-s01-addons:/mnt/extra-addons
+    networks:
+      - odoo-s01-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8069/web/health | grep -q 'ok\\|pass\\|{' || curl -sf http://localhost:8069/ | grep -qi 'odoo\\|login\\|openerp' || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
 
 volumes:
-  odoo_data:
+  odoo-s01-db-data:
+  odoo-s01-data:
+  odoo-s01-addons:
+
+networks:
+  odoo-s01-net:
+    driver: bridge
