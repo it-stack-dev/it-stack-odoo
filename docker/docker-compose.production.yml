@@ -1,53 +1,188 @@
-# Lab 06 — Production: odoo HA-ready with monitoring and external volumes
+# Lab 06 — Production Deployment: Odoo ERP
+# Full production-grade stack: PostgreSQL · Redis · OpenLDAP · Keycloak · Mailhog · Odoo (workers mode)
+# Ports: Web:8390  Gevent:8391  KC:8490  LDAP:3900  MH:8690
+# Naming: odoo-p06-{service}  (p06 = production lab 06)
 ---
+name: it-stack-odoo-lab06
+
 services:
-  odoo:
-    image: odoo:17
-    container_name: it-stack-odoo
-    restart: always
-    ports:
-      - "8069:$firstPort"
+
+  odoo-p06-db:
+    image: postgres:15-alpine
+    container_name: odoo-p06-db
+    restart: unless-stopped
     environment:
-      - IT_STACK_ENV=production
-      - KEYCLOAK_URL=
-      - DB_HOST=
-      - REDIS_HOST=
-      - GRAYLOG_HOST=
+      POSTGRES_USER: odoo
+      POSTGRES_PASSWORD: OdooProd06!
+      POSTGRES_DB: odoo
     volumes:
-      - odoo_data:/var/lib/odoo
-      - /etc/ssl/certs:/etc/ssl/certs:ro
-    deploy:
-      replicas: 1
-      resources:
-        limits:
-          cpus: "4.0"
-          memory: G
-        reservations:
-          cpus: "1.0"
-          memory: 1G
-      restart_policy:
-        condition: any
-        delay: 5s
-    logging:
-      driver: gelf
-      options:
-        gelf-address: "udp://${GRAYLOG_HOST}:12201"
-        tag: "it-stack-odoo"
+      - db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost/health || exit 1"]
+      test: ["CMD-SHELL", "pg_isready -U odoo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 512M}
+        reservations: {cpus: "0.25", memory: 128M}
+    networks: [lab06]
+
+  odoo-p06-redis:
+    image: redis:7-alpine
+    container_name: odoo-p06-redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 320M}
+    networks: [lab06]
+
+  odoo-p06-ldap:
+    image: osixia/openldap:1.5.0
+    container_name: odoo-p06-ldap
+    restart: unless-stopped
+    environment:
+      LDAP_ORGANISATION: IT-Stack Lab
+      LDAP_DOMAIN: lab.local
+      LDAP_ADMIN_PASSWORD: LdapProd06!
+    ports:
+      - "3900:389"
+    volumes:
+      - ldap-data:/var/lib/ldap
+      - ldap-config:/etc/ldap/slapd.d
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b dc=lab,dc=local -D cn=admin,dc=lab,dc=local -w LdapProd06! cn=admin && echo ok"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits: {cpus: "0.5", memory: 256M}
+    networks: [lab06]
+
+  odoo-p06-kc:
+    image: quay.io/keycloak/keycloak:24.0.3
+    container_name: odoo-p06-kc
+    command: start-dev
+    restart: unless-stopped
+    environment:
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: Admin06!
+    ports:
+      - "8490:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/realms/master || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    deploy:
+      resources:
+        limits: {cpus: "1.0", memory: 768M}
+        reservations: {cpus: "0.25", memory: 256M}
+    networks: [lab06]
+
+  odoo-p06-mail:
+    image: mailhog/mailhog:latest
+    container_name: odoo-p06-mail
+    restart: unless-stopped
+    ports:
+      - "8690:8025"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8025/api/v2/messages || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits: {cpus: "0.25", memory: 128M}
+    networks: [lab06]
+
+  odoo-p06-app:
+    image: odoo:17
+    container_name: odoo-p06-app
+    restart: unless-stopped
+    depends_on:
+      odoo-p06-db:
+        condition: service_healthy
+      odoo-p06-redis:
+        condition: service_healthy
+      odoo-p06-ldap:
+        condition: service_healthy
+      odoo-p06-kc:
+        condition: service_healthy
+      odoo-p06-mail:
+        condition: service_started
+    ports:
+      - "8390:8069"
+      - "8391:8072"
+    command: >-
+      --workers=2
+      --max-cron-threads=1
+      --longpolling-port=8072
+      --smtp-server=odoo-p06-mail
+      --smtp-port=1025
+      --limit-memory-hard=2684354560
+      --limit-memory-soft=2147483648
+    environment:
+      IT_STACK_ENV: production
+      IT_STACK_MODULE: odoo
+      IT_STACK_LAB: "06"
+      HOST: odoo-p06-db
+      PORT: "5432"
+      USER: odoo
+      PASSWORD: OdooProd06!
+      LDAP_HOST: odoo-p06-ldap
+      LDAP_PORT: "389"
+      LDAP_BASE: dc=lab,dc=local
+      LDAP_ADMIN_DN: cn=admin,dc=lab,dc=local
+      LDAP_ADMIN_PASSWORD: LdapProd06!
+      KEYCLOAK_URL: http://odoo-p06-kc:8080
+      KEYCLOAK_REALM: it-stack
+      KEYCLOAK_CLIENT_ID: odoo
+      KEYCLOAK_CLIENT_SECRET: odoo-prod-secret-06
+      SNIPEIT_URL: ""
+      SNIPEIT_API_TOKEN: ""
+    volumes:
+      - data:/var/lib/odoo
+      - addons:/mnt/extra-addons
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8069/web/login || exit 1"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
       start_period: 120s
-    networks:
-      - it-stack-net
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 3G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+    networks: [lab06]
 
 networks:
-  it-stack-net:
-    external: true
-    name: it-stack-production
+  lab06:
+    driver: bridge
+    name: it-stack-odoo-lab06
 
 volumes:
-  odoo_data:
-    external: true
-    name: it-stack-odoo-data
+  db-data:
+  redis-data:
+  ldap-data:
+  ldap-config:
+  data:
+  addons:
