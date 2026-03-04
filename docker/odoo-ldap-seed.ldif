@@ -1,0 +1,77 @@
+# odoo-ldap-seed.ldif
+# FreeIPA-style LDAP seed for Odoo Lab 05 (INT-05: Odoo↔Keycloak OIDC)
+# Tree:  cn=accounts,dc=lab,dc=local
+# Users: odooadmin · odoouser1 · odoouser2  (pw: Lab05Password!)
+# Groups: cn=admins · cn=odoo-users
+
+# ── Organizational units (FreeIPA-style) ─────────────────────────────────────
+dn: cn=accounts,dc=lab,dc=local
+objectClass: top
+objectClass: nsContainer
+cn: accounts
+
+dn: cn=users,cn=accounts,dc=lab,dc=local
+objectClass: top
+objectClass: nsContainer
+cn: users
+
+dn: cn=groups,cn=accounts,dc=lab,dc=local
+objectClass: top
+objectClass: nsContainer
+cn: groups
+
+# ── Users ────────────────────────────────────────────────────────────────────
+dn: uid=odooadmin,cn=users,cn=accounts,dc=lab,dc=local
+objectClass: top
+objectClass: inetOrgPerson
+objectClass: organizationalPerson
+objectClass: person
+uid: odooadmin
+cn: Odoo Admin
+sn: Admin
+givenName: Odoo
+mail: odooadmin@lab.local
+userPassword: Lab05Password!
+description: Odoo ERP administrator — lab seed account
+
+dn: uid=odoouser1,cn=users,cn=accounts,dc=lab,dc=local
+objectClass: top
+objectClass: inetOrgPerson
+objectClass: organizationalPerson
+objectClass: person
+uid: odoouser1
+cn: Odoo User One
+sn: User One
+givenName: Odoo
+mail: odoouser1@lab.local
+userPassword: Lab05Password!
+description: Odoo ERP standard user — lab seed account
+
+dn: uid=odoouser2,cn=users,cn=accounts,dc=lab,dc=local
+objectClass: top
+objectClass: inetOrgPerson
+objectClass: organizationalPerson
+objectClass: person
+uid: odoouser2
+cn: Odoo User Two
+sn: User Two
+givenName: Odoo
+mail: odoouser2@lab.local
+userPassword: Lab05Password!
+description: Odoo ERP standard user — lab seed account
+
+# ── Groups ───────────────────────────────────────────────────────────────────
+dn: cn=admins,cn=groups,cn=accounts,dc=lab,dc=local
+objectClass: top
+objectClass: groupOfNames
+cn: admins
+description: Odoo ERP administrators group
+member: uid=odooadmin,cn=users,cn=accounts,dc=lab,dc=local
+
+dn: cn=odoo-users,cn=groups,cn=accounts,dc=lab,dc=local
+objectClass: top
+objectClass: groupOfNames
+cn: odoo-users
+description: Odoo ERP standard users group
+member: uid=odoouser1,cn=users,cn=accounts,dc=lab,dc=local
+member: uid=odoouser2,cn=users,cn=accounts,dc=lab,dc=local

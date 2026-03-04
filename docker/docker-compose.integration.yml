@@ -14,7 +14,12 @@
 #   + WireMock also mocks SuiteCRM JSONRPC (customer sync partner)
 #   + Odoo integration env vars: SNIPEIT_URL, SNIPEIT_TOKEN, SUITECRM_URL
 #   + Redis retained for Odoo session cache
-# Integration tested: Odoo ↔ Snipe-IT (asset procurement), Odoo ↔ SuiteCRM (customer sync)
+# Integration tested: Odoo ↔ Keycloak OIDC (INT-05) · Odoo ↔ Snipe-IT (asset procurement) · Odoo ↔ SuiteCRM (customer sync)
+# =============================================================================
+# INT-05 additions:
+#   + odoo-int-ldap-seed: init container — loads FreeIPA-style LDIF (odooadmin/odoouser1/odoouser2)
+#   + Keycloak depends on seed completion for LDAP federation to find pre-seeded users
+#   + LDAP_BASE_DN updated to cn=users,cn=accounts,dc=lab,dc=local (FreeIPA tree)
 # =============================================================================
 
 name: it-stack-odoo-lab05
@@ -97,6 +102,27 @@ services:
           memory: 256M
           cpus: "0.25"
 
+  # ── LDAP seed (INT-05) ──────────────────────────────────────────────────
+  odoo-int-ldap-seed:
+    image: osixia/openldap:1.5.0
+    container_name: odoo-int-ldap-seed
+    restart: no
+    entrypoint: >
+      /bin/bash -c
+      "sleep 8 &&
+      ldapadd -x -H ldap://odoo-i05-ldap:389
+        -D 'cn=admin,dc=lab,dc=local'
+        -w LdapLab05!
+        -f /ldif/odoo-ldap-seed.ldif &&
+      echo 'SEED_COMPLETE'"
+    volumes:
+      - ./odoo-ldap-seed.ldif:/ldif/odoo-ldap-seed.ldif:ro
+    depends_on:
+      odoo-i05-ldap:
+        condition: service_healthy
+    networks:
+      - odoo-i05-net
+
   # ── Keycloak ─────────────────────────────────────────────────────────────
   odoo-i05-kc:
     image: quay.io/keycloak/keycloak:24.0.3
@@ -113,6 +139,9 @@ services:
       KC_HTTP_ENABLED: "true"
     ports:
       - "8470:8080"
+    depends_on:
+      odoo-int-ldap-seed:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/realms/master || exit 1"]
       interval: 15s
@@ -188,11 +217,13 @@ services:
       PORT: "5432"
       USER: odoo
       PASSWORD: OdooLab05!
-      # LDAP integration
+      # LDAP integration (FreeIPA-style tree — seeded by odoo-int-ldap-seed)
       LDAP_HOST: odoo-i05-ldap
       LDAP_PORT: "389"
-      LDAP_BASE_DN: dc=lab,dc=local
+      LDAP_BASE_DN: cn=users,cn=accounts,dc=lab,dc=local
       LDAP_FILTER: (uid=%s)
+      LDAP_BIND_DN: cn=readonly,dc=lab,dc=local
+      LDAP_BIND_PASSWORD: ReadOnly05!
       LDAP_ADMIN_DN: cn=admin,dc=lab,dc=local
       LDAP_ADMIN_PASSWORD: LdapLab05!
       # Keycloak OIDC
