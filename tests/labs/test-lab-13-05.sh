@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # test-lab-13-05.sh — Lab 13-05: Advanced Integration
 # Module 13: Odoo ERP  ·  INT-05: Odoo↔Keycloak OIDC  ·  INT-12: Odoo↔SuiteCRM customer sync
 # Services: PostgreSQL · Redis · OpenLDAP · Keycloak · WireMock (Snipe-IT/SuiteCRM-mock) · Mailhog · Odoo
