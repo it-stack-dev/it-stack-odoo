@@ -1,9 +1,10 @@
 ﻿#!/usr/bin/env bash
 # test-lab-13-05.sh — Lab 13-05: Advanced Integration
-# Module 13: Odoo ERP  ·  INT-05: Odoo↔Keycloak OIDC
+# Module 13: Odoo ERP  ·  INT-05: Odoo↔Keycloak OIDC  ·  INT-12: Odoo↔SuiteCRM customer sync
 # Services: PostgreSQL · Redis · OpenLDAP · Keycloak · WireMock (Snipe-IT/SuiteCRM-mock) · Mailhog · Odoo
 # Ports:    Odoo:8370  Gevent:8371  WireMock:8372  KC:8470  LDAP:3896  MH:8670
 # INT-05:   LDAP seed (odooadmin/odoouser1/odoouser2) · KC LDAP federation · Odoo OIDC provider · token issuance
+# INT-12:   SuiteCRM JSONRPC WireMock stub · SUITECRM_URL/JSONRPC_ENDPOINT env vars · container reach
 set -euo pipefail
 
 LAB_ID="13-05"
@@ -489,10 +490,61 @@ if [ -n "${OIDC_ACCESS}" ]; then
   fi
 fi
 
+# ── Phase 7: INT-12 SuiteCRM ↔ Odoo customer sync (partner API WireMock) ──────
+section "Phase 7: SuiteCRM Customer Sync WireMock + Env Vars (INT-12)"
+
+# 7.1 -- Register SuiteCRM JSONRPC contact list stub
+HTTP_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+  -X POST "${MOCK_URL}/__admin/mappings" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "request": {"method": "POST", "urlPattern": "/jsonrpc.*"},
+    "response": {"status": 200,
+                 "headers": {"Content-Type": "application/json"},
+                 "body": "{\\"result\\":{\\"entry_list\\":[{\\"id\\":\\"contact-001\\",\\"name\\":\\"Alice Odoo\\",\\"email1\\":\\"alice@lab.local\\",\\"account_name\\":\\"Odoo Corp\\"}]}}"}}
+  }' || echo "000")
+[ "${HTTP_STATUS}" = "201" ] \
+  && pass "INT-12: WireMock stub /jsonrpc (SuiteCRM contact list) registered" \
+  || fail "INT-12: WireMock stub /jsonrpc failed (HTTP ${HTTP_STATUS})"
+
+# 7.2 -- Verify SuiteCRM JSONRPC stub responds
+if curl -sf -X POST "${MOCK_URL}/jsonrpc" \
+     -H "Content-Type: application/json" \
+     -d '{"method":"get_entry_list","parameters":{"module_name":"Contacts"}}' \
+     | grep -q 'entry_list'; then
+  pass "INT-12: WireMock SuiteCRM JSONRPC contact list responds correctly"
+else
+  fail "INT-12: WireMock SuiteCRM JSONRPC contact list not responding"
+fi
+
+# 7.3 -- Env var checks for INT-12
+for envpair in "SUITECRM_URL=http://odoo-i05-mock" "SUITECRM_JSONRPC_ENDPOINT=/jsonrpc"; do
+  KEY="${envpair%%=*}"
+  VAL="${envpair#*=}"
+  if docker exec odoo-i05-app env 2>/dev/null | grep -q "${KEY}=${VAL}"; then
+    pass "INT-12: Env ${KEY} set correctly in Odoo container"
+  else
+    fail "INT-12: Env ${KEY} not set or wrong in Odoo container"
+  fi
+done
+
+# 7.4 -- Odoo container → SuiteCRM WireMock reachable
+if docker exec odoo-i05-app curl -sf \
+     -X POST "http://odoo-i05-mock:8080/jsonrpc" \
+     -H "Content-Type: application/json" \
+     -d '{"method":"get_entry_list","parameters":{"module_name":"Contacts"}}' \
+     > /dev/null 2>&1; then
+  pass "INT-12: Odoo container can reach SuiteCRM JSONRPC endpoint (WireMock)"
+else
+  fail "INT-12: Odoo container cannot reach SuiteCRM JSONRPC endpoint"
+fi
+
 # ── Results ───────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${CYAN}============================================================${NC}"
-echo -e "  Lab ${LAB_ID} Complete — INT-05: Odoo↔Keycloak OIDC"
+echo -e "  Lab ${LAB_ID}: INT-05 + INT-12 Complete"
+echo -e "  INT-05: Odoo ↔ Keycloak OIDC"
+echo -e "  INT-12: Odoo ↔ SuiteCRM customer sync"
 echo -e "  ${GREEN}PASS: ${PASS}${NC} | ${RED}FAIL: ${FAIL}${NC}"
 echo -e "${CYAN}============================================================${NC}"
 
