@@ -41,7 +41,7 @@ services:
     networks:
       - odoo-s01-net
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8069/web/health | grep -qE 'ok|pass|{' || curl -sf http://localhost:8069/ | grep -qi 'odoo\|login\|openerp' || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8069/web/health | grep -qE 'ok|pass|{' || curl -sf http://localhost:8069/ | grep -qi 'odoo|login|openerp' || exit 1"]
       interval: 20s
       timeout: 10s
       retries: 10
