@@ -81,7 +81,7 @@ services:
       - odoo-l02-data:/var/lib/odoo
       - odoo-l02-addons:/mnt/extra-addons
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8069/web/health | grep -q 'ok\\|pass'"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8069/web/health | grep -qE 'ok\|pass'"]
       interval: 30s
       timeout: 10s
       retries: 10
